@@ -33,6 +33,8 @@ var (
 	ErrHasPendingApplication = errors.New("project has pending applications and cannot settle")
 	// ErrVoucherAlreadyChecked 凭证已核验，禁止重复/并发核验。
 	ErrVoucherAlreadyChecked = errors.New("voucher already checked")
+	// ErrVoucherInvalidStatus 凭证处于非待核验状态（异常状态），不可核验。
+	ErrVoucherInvalidStatus = errors.New("voucher is not in pending status and cannot be checked")
 	// ErrVoucherCheckForbidden 非平台管理员无权核验凭证。
 	ErrVoucherCheckForbidden = errors.New("forbidden: only platform admin can check vouchers")
 	// ErrNotProjectOwner 非本项目所属组织。
@@ -398,8 +400,15 @@ func (s *DisbursementService) CheckVoucher(reviewerID uint, role string, voucher
 		if err != nil {
 			return err
 		}
-		if v.Status == constants.VoucherChecked {
+		// 白名单校验：只有待核验(pending)可通过；已核验返回"重复核验"，
+		// 任何其他异常状态一律按冲突拒绝，绝不当成待核验放行。
+		switch v.Status {
+		case constants.VoucherPending:
+			// 唯一允许核验的状态
+		case constants.VoucherChecked:
 			return fmt.Errorf("%w: voucher=%d checked_by=%d", ErrVoucherAlreadyChecked, v.ID, v.CheckerID)
+		default:
+			return fmt.Errorf("%w: voucher=%d status=%q", ErrVoucherInvalidStatus, v.ID, v.Status)
 		}
 		now := time.Now()
 		v.Status = constants.VoucherChecked

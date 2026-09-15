@@ -544,6 +544,42 @@ func TestConcurrentCheckVoucherSafe(t *testing.T) {
 	}
 }
 
+// 凭证处于异常（非 pending/checked）状态时，核验必须返回冲突，不得当成待核验放行。
+func TestCheckVoucherAbnormalStatusRejected(t *testing.T) {
+	f := newFundFixture(t)
+	v := f.makeUncheckedVoucher(t, 800)
+
+	for _, bad := range []string{"", "rejected", "bogus", "PENDING", "checked "} {
+		// 直接写入异常状态，模拟脏数据/非法迁移值。
+		if err := f.db.Model(&model.ExpenseVoucher{}).Where("id = ?", v.ID).
+			Update("status", bad).Error; err != nil {
+			t.Fatalf("inject status %q: %v", bad, err)
+		}
+		if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID); !errors.Is(err, ErrVoucherInvalidStatus) {
+			t.Fatalf("abnormal status %q must be ErrVoucherInvalidStatus, got %v", bad, err)
+		}
+		// 被拒后状态原样保留，金额也不得计入已用。
+		got, _ := repository.NewExpenseVoucherRepository(f.db).FindByID(v.ID)
+		if got.Status != bad {
+			t.Fatalf("status must remain %q after rejection, got %q", bad, got.Status)
+		}
+	}
+	sum, _ := f.svc.GetSummary(f.projectID)
+	if !almostEqual(sum.UsedAmount, 0) {
+		t.Fatalf("abnormal voucher must never count as used, got %.2f", sum.UsedAmount)
+	}
+
+	// 恢复为 pending 后核验正常成功（证明白名单只放行 pending）。
+	if err := f.db.Model(&model.ExpenseVoucher{}).Where("id = ?", v.ID).
+		Update("status", constants.VoucherPending).Error; err != nil {
+		t.Fatalf("reset status: %v", err)
+	}
+	checked, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID)
+	if err != nil || checked.Status != constants.VoucherChecked {
+		t.Fatalf("voucher should check normally once restored to pending, got %v %+v", err, checked)
+	}
+}
+
 // 捐赠人公示只暴露已核验凭证；待核验凭证仅组织/平台可见。
 func TestPublicFundsHidesUncheckedVouchers(t *testing.T) {
 	f := newFundFixture(t)

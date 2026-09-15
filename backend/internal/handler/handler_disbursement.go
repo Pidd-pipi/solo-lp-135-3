@@ -36,6 +36,7 @@ func (h *DisbursementHandler) fail(c *gin.Context, err error) {
 		errors.Is(err, service.ErrVoucherExceedsOrder),
 		errors.Is(err, service.ErrHasPendingApplication),
 		errors.Is(err, service.ErrVoucherAlreadyChecked),
+		errors.Is(err, service.ErrVoucherInvalidStatus),
 		errors.Is(err, service.ErrProjectNotFundable),
 		errors.Is(err, repository.ErrConflict):
 		util.Fail(c, http.StatusConflict, constants.CodeConflict, err.Error())
