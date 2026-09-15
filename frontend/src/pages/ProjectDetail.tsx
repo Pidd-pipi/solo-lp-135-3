@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { projectAPI, donationAPI } from '../api';
-import { Project, Donation, ProjectUpdate } from '../types';
+import { projectAPI, donationAPI, fundAPI } from '../api';
+import { Project, Donation, ProjectUpdate, DisbursementOrder, ExpenseVoucher, FundSummary } from '../types';
 import { useAuth } from '../context/AuthContext';
 import DonationModal from '../components/DonationModal';
+import FundPanel from '../components/FundPanel';
+import OrgFundManager from '../components/OrgFundManager';
 
 const ProjectDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -14,7 +16,8 @@ const ProjectDetail = () => {
   const [updates, setUpdates] = useState<ProjectUpdate[]>([]);
   const [showDonationModal, setShowDonationModal] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'detail' | 'updates' | 'donations'>('detail');
+  const [activeTab, setActiveTab] = useState<'detail' | 'updates' | 'donations' | 'funds'>('detail');
+  const [funds, setFunds] = useState<{ orders: DisbursementOrder[]; vouchers: ExpenseVoucher[]; summary: FundSummary } | null>(null);
 
   useEffect(() => {
     if (id) loadProject();
@@ -33,6 +36,24 @@ const ProjectDetail = () => {
     }
   };
 
+  const loadFunds = async () => {
+    if (!user || !id) return;
+    try {
+      const res = await fundAPI.getPublicFunds(id);
+      setFunds({
+        orders: res.data.disbursements || [],
+        vouchers: res.data.vouchers || [],
+        summary: res.data.summary,
+      });
+    } catch (error) {
+      console.error('加载资金透明信息失败:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'funds' && user && id && !funds) loadFunds();
+  }, [activeTab, user, id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleDonateClick = () => {
     if (!user) {
       navigate('/login');
@@ -49,6 +70,8 @@ const ProjectDetail = () => {
     environment: '环保',
     other: '其他',
   };
+
+  const isOwnerOrg = user?.role === 'org' && project?.organization?.userId === user.id;
 
   if (loading) return <div className="text-center py-20">加载中...</div>;
   if (!project) return <div className="text-center py-20">项目不存在</div>;
@@ -67,6 +90,11 @@ const ProjectDetail = () => {
                 {project.status === 'completed' && (
                   <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm font-medium">
                     已完成
+                  </span>
+                )}
+                {project.settledAt && (
+                  <span className="px-3 py-1 bg-red-50 text-red-600 rounded-full text-sm font-medium">
+                    已结项
                   </span>
                 )}
               </div>
@@ -96,6 +124,12 @@ const ProjectDetail = () => {
                   >
                     捐赠记录 ({donations.length})
                   </button>
+                  <button
+                    onClick={() => user ? setActiveTab('funds') : navigate('/login')}
+                    className={`pb-4 font-medium ${activeTab === 'funds' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-gray-500'}`}
+                  >
+                    资金透明
+                  </button>
                 </div>
               </div>
 
@@ -110,7 +144,7 @@ const ProjectDetail = () => {
 
               {activeTab === 'updates' && (
                 <div className="space-y-6">
-                  {user?.role === 'org' && project.organization?.userId === user.id && (
+                  {isOwnerOrg && (
                     <Link
                       to={`/create-update/${project.id}`}
                       className="inline-flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 mb-4"
@@ -164,6 +198,33 @@ const ProjectDetail = () => {
                       </div>
                     ))
                   )}
+                </div>
+              )}
+
+              {activeTab === 'funds' && (
+                <div className="space-y-8">
+                  {isOwnerOrg && (
+                    <div>
+                      <h3 className="text-xl font-semibold mb-3">组织资金管理</h3>
+                      <OrgFundManager
+                        projectId={project.id}
+                        settled={!!project.settledAt}
+                        onChanged={() => {
+                          loadProject();
+                          setFunds(null);
+                          loadFunds();
+                        }}
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="text-xl font-semibold mb-3">资金拨付与用途公示</h3>
+                    {!funds ? (
+                      <p className="text-gray-500">加载中...</p>
+                    ) : (
+                      <FundPanel summary={funds.summary} disbursements={funds.orders} vouchers={funds.vouchers} />
+                    )}
+                  </div>
                 </div>
               )}
             </div>

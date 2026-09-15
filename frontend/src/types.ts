@@ -29,6 +29,7 @@ export interface Project {
   status: ProjectStatus;
   startDate?: string;
   endDate?: string;
+  settledAt?: string;
   createdAt: string;
   progress?: number;
   organization?: Organization;
@@ -88,4 +89,70 @@ export interface RankingItem {
   totalDonation: number;
   serviceHours: number;
   rank: number;
+}
+
+// ===== 资金拨付与用途凭证 =====
+
+export type FundApplicationStatus = 'pending' | 'approved' | 'rejected';
+export type DisbursementStatus = 'pending' | 'paid';
+export type VoucherStatus = 'pending' | 'checked';
+
+export interface FundApplication {
+  id: string;
+  projectId: string;
+  orgId: string;
+  applicantId: string;
+  amount: number;
+  purpose: string;
+  batchNo: string;
+  status: FundApplicationStatus;
+  reviewerId?: number;
+  reviewComment?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+  project?: Project;
+  order?: DisbursementOrder;
+}
+
+export interface DisbursementOrder {
+  id: string;
+  orderNo: string;
+  applicationId: string;
+  projectId: string;
+  orgId: string;
+  amount: number;
+  purpose: string;
+  status: DisbursementStatus;
+  paidAt?: string;
+  createdAt: string;
+  vouchers?: ExpenseVoucher[];
+}
+
+export interface ExpenseVoucher {
+  id: string;
+  orderId: string;
+  applicationId: string;
+  projectId: string;
+  amount: number;
+  category: string;
+  usage: string;
+  voucherNo: string;
+  invoiceNo?: string;
+  attachmentUrl?: string;
+  progressNote?: string;
+  spentAt: string;
+  status: VoucherStatus;
+  createdAt: string;
+}
+
+export interface FundSummary {
+  projectId: number;
+  projectTitle: string;
+  raisedAmount: number;
+  occupiedAmount: number;
+  disbursedAmount: number;
+  usedAmount: number;
+  pendingAmount: number;
+  remainingAmount: number;
 }

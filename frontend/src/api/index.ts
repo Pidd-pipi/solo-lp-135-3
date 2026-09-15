@@ -68,4 +68,31 @@ export const adminAPI = {
   reviewOrganization: (id: string, data: any) => api.post(`/admin/organizations/${id}/review`, data),
 };
 
+// 资金拨付与用途凭证
+export const fundAPI = {
+  // 捐赠人公示：已审核拨付单、支出凭证与资金汇总
+  getPublicFunds: (projectId: string) => api.get(`/projects/${projectId}/funds`),
+  // 组织：提交用款申请
+  apply: (projectId: string, data: { amount: number; purpose: string; batchNo?: string }) =>
+    api.post(`/projects/${projectId}/disbursements`, data),
+  // 组织：结项
+  settle: (projectId: string) => api.post(`/projects/${projectId}/settle`),
+  // 组织：我的用款申请
+  getMyApplications: (params?: any) => api.get('/disbursements/org/my', { params }),
+  // 申请详情（含拨付单与凭证）
+  getApplication: (id: string) => api.get(`/disbursements/applications/${id}`),
+  // 组织：回填支出凭证
+  addVoucher: (applicationId: string, data: any) =>
+    api.post(`/disbursements/applications/${applicationId}/vouchers`, data),
+  // 平台：待审核申请
+  getPendingApplications: (params?: any) => api.get('/admin/disbursements/pending', { params }),
+  // 平台：全量申请追溯
+  getAllApplications: (params?: any) => api.get('/admin/disbursements/applications', { params }),
+  // 平台：审核（通过生成唯一拨付单 / 驳回释放额度）
+  reviewApplication: (id: string, data: { approve: boolean; comment?: string }) =>
+    api.post(`/admin/disbursements/applications/${id}/review`, data),
+  // 平台：核验支出凭证
+  checkVoucher: (id: string) => api.post(`/admin/disbursements/vouchers/${id}/check`),
+};
+
 export default api;

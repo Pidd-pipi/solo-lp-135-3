@@ -24,6 +24,28 @@ const (
 	ProjectCompleted = "completed"
 )
 
+// 用款申请状态
+const (
+	FundApplyPending  = "pending"  // 待审核（占用额度）
+	FundApplyApproved = "approved" // 审核通过（已生成拨付单）
+	FundApplyRejected = "rejected" // 审核驳回（释放额度）
+)
+
+// 拨付单状态
+const (
+	DisbursementPending = "pending" // 已生成，待拨付/回填
+	DisbursementPaid    = "paid"    // 已拨付
+)
+
+// 支出凭证状态
+const (
+	VoucherPending = "pending" // 已回填，待核验
+	VoucherChecked = "checked" // 平台核验通过
+)
+
+// 金额比较容差（decimal 以 float64 承载，避免浮点误差）。
+const AmountEpsilon = 0.000001
+
 // 组织审核状态
 const (
 	OrgPending  = "pending"

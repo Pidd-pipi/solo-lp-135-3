@@ -6,6 +6,7 @@ import (
 
 	"github.com/givetrack/givetrack/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ProjectRepository 项目数据访问。
@@ -41,6 +42,23 @@ func (r *ProjectRepository) Update(p *model.Project) error {
 		return fmt.Errorf("update project: %w", err)
 	}
 	return nil
+}
+
+// LockByID 在当前事务内对项目行加排他锁（MySQL FOR UPDATE），
+// 串行化同一项目的用款申请/审核等额度变更操作。
+// 必须在事务中调用；对不支持该子句的驱动（如测试用 SQLite）退化为普通查询。
+func (r *ProjectRepository) LockByID(id uint) (*model.Project, error) {
+	var p model.Project
+	q := r.db.Preload("Organization").Preload("Organization.User")
+	if r.db.Dialector.Name() == "mysql" {
+		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := q.First(&p, id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("lock project by id: %w", err)
+	}
+	return &p, nil
 }
 
 // List 分页查询项目，支持分类/状态筛选。

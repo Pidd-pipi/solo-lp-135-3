@@ -22,6 +22,7 @@ func Setup(
 	donationSvc *service.DonationService,
 	rankingSvc *service.RankingService,
 	adminSvc *service.AdminService,
+	disbSvc *service.DisbursementService,
 	cfg *config.Config,
 	logger *slog.Logger,
 ) *gin.Engine {
@@ -34,6 +35,7 @@ func Setup(
 	donationHandler := handler.NewDonationHandler(donationSvc)
 	rankingHandler := handler.NewRankingHandler(rankingSvc)
 	adminHandler := handler.NewAdminHandler(adminSvc)
+	disbHandler := handler.NewDisbursementHandler(disbSvc)
 
 	r.GET("/healthz", healthHandler.Healthz)
 	r.GET("/readyz", healthHandler.Readyz)
@@ -58,6 +60,20 @@ func Setup(
 		projects.GET("/:id", projectHandler.GetDetail)
 		projects.GET("/:id/updates", projectHandler.Updates)
 		projects.POST("/:id/updates", middleware.Auth(authSvc), middleware.RequireRole(constants.RoleOrg), projectHandler.CreateUpdate)
+
+		// 资金透明公示：任何登录用户（捐赠人）可查看已审核拨付单与支出凭证及汇总。
+		projects.GET("/:id/funds", middleware.Auth(authSvc), disbHandler.PublicFunds)
+		// 组织用款：分批申请、结项。
+		projects.POST("/:id/disbursements", middleware.Auth(authSvc), middleware.RequireRole(constants.RoleOrg), disbHandler.Apply)
+		projects.POST("/:id/settle", middleware.Auth(authSvc), middleware.RequireRole(constants.RoleOrg), disbHandler.Settle)
+	}
+
+	disbursements := v1.Group("/disbursements", middleware.Auth(authSvc))
+	{
+		// 组织侧：本组织申请列表、申请详情、回填支出凭证。
+		disbursements.GET("/org/my", middleware.RequireRole(constants.RoleOrg), disbHandler.OrgApplications)
+		disbursements.GET("/applications/:id", disbHandler.ApplicationDetail)
+		disbursements.POST("/applications/:id/vouchers", middleware.RequireRole(constants.RoleOrg), disbHandler.AddVoucher)
 	}
 
 	donations := v1.Group("/donations")
@@ -80,6 +96,12 @@ func Setup(
 		admin.POST("/projects/:id/review", adminHandler.ReviewProject)
 		admin.GET("/organizations/pending", adminHandler.PendingOrganizations)
 		admin.POST("/organizations/:id/review", adminHandler.ReviewOrganization)
+
+		// 资金拨付审核与追溯：待审列表、全量追溯、审核（生成唯一拨付单）、凭证核验。
+		admin.GET("/disbursements/pending", disbHandler.PendingApplications)
+		admin.GET("/disbursements/applications", disbHandler.AllApplications)
+		admin.POST("/disbursements/applications/:id/review", disbHandler.Review)
+		admin.POST("/disbursements/vouchers/:id/check", disbHandler.CheckVoucher)
 	}
 
 	r.GET("/swagger/doc.json", healthHandler.SwaggerJSON)
