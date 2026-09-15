@@ -202,30 +202,68 @@ func TestDisbursementHTTPFlow(t *testing.T) {
 
 	// 7. 回填凭证：4000 通过，再 2500 超额拒绝，补 2000 恰好满额通过。
 	pathVoucher := "/api/v1/disbursements/applications/" + itoa(appID) + "/vouchers"
-	if code, env := e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
+	code, env = e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
 		"amount": 4000, "category": "物资", "usage": "课外读物 3000 册", "invoiceNo": "INV-1",
-	}); code != http.StatusCreated {
+	})
+	if code != http.StatusCreated {
 		t.Fatalf("voucher 4000 expected 201, got %d %s", code, env.Message)
 	}
-	if code, env := e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
+	voucher1ID := uint(dataMap(t, env)["voucher"].(map[string]interface{})["id"].(float64))
+	if code, _ := e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
 		"amount": 2500, "category": "物流", "usage": "超额配送",
 	}); code != http.StatusConflict {
-		t.Fatalf("over-limit voucher should be 409, got %d %s", code, env.Message)
+		t.Fatalf("over-limit voucher should be 409, got %d", code)
 	}
-	if code, env := e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
+	code, env = e.do(http.MethodPost, pathVoucher, e.orgTok, map[string]interface{}{
 		"amount": 2000, "category": "物流", "usage": "书架配送安装", "progressNote": "已完成首批配送",
-	}); code != http.StatusCreated {
+	})
+	if code != http.StatusCreated {
 		t.Fatalf("voucher 2000 expected 201, got %d %s", code, env.Message)
 	}
+	voucher2ID := uint(dataMap(t, env)["voucher"].(map[string]interface{})["id"].(float64))
 
-	// 8. 捐赠人公示：1 张拨付单、2 张凭证、已用 6000。
+	// 8. 未核验前：捐赠人看不到凭证、已用金额为 0。
+	_, env = e.do(http.MethodGet, pathFunds(pid), e.donorTok, nil)
+	pub = dataMap(t, env)
+	if len(pub["vouchers"].([]interface{})) != 0 {
+		t.Fatalf("unchecked vouchers must not be public, got %d", len(pub["vouchers"].([]interface{})))
+	}
+	if pub["summary"].(map[string]interface{})["usedAmount"].(float64) != 0 {
+		t.Fatalf("used amount must be 0 before checking: %v", pub["summary"])
+	}
+
+	// 9. 核验权限：组织/捐赠人均无权（403）。
+	pathCheck := func(vid uint) string { return "/api/v1/admin/disbursements/vouchers/" + itoa(vid) + "/check" }
+	if code, _ := e.do(http.MethodPost, pathCheck(voucher1ID), e.orgTok, nil); code != http.StatusForbidden {
+		t.Fatalf("org check should be 403, got %d", code)
+	}
+	if code, _ := e.do(http.MethodPost, pathCheck(voucher1ID), e.donorTok, nil); code != http.StatusForbidden {
+		t.Fatalf("donor check should be 403, got %d", code)
+	}
+
+	// 10. 管理员核验第一张：成功；重复核验 → 409。
+	if code, env := e.do(http.MethodPost, pathCheck(voucher1ID), e.adminTok, nil); code != http.StatusOK {
+		t.Fatalf("admin check expected 200, got %d %s", code, env.Message)
+	}
+	if code, env := e.do(http.MethodPost, pathCheck(voucher1ID), e.adminTok, nil); code != http.StatusConflict {
+		t.Fatalf("duplicate check should be 409, got %d %s", code, env.Message)
+	}
+	// 管理员核验第二张。
+	if code, _ := e.do(http.MethodPost, pathCheck(voucher2ID), e.adminTok, nil); code != http.StatusOK {
+		t.Fatalf("check voucher2 expected 200, got %d", code)
+	}
+	if code, _ := e.do(http.MethodPost, pathCheck(voucher2ID), e.adminTok, nil); code != http.StatusConflict {
+		t.Fatalf("repeat check voucher2 should be 409, got %d", code)
+	}
+
+	// 11. 核验后捐赠人公示：1 张拨付单、2 张凭证、已用 6000。
 	_, env = e.do(http.MethodGet, pathFunds(pid), e.donorTok, nil)
 	pub = dataMap(t, env)
 	if len(pub["disbursements"].([]interface{})) != 1 {
 		t.Fatalf("public should show 1 disbursement")
 	}
 	if len(pub["vouchers"].([]interface{})) != 2 {
-		t.Fatalf("public should show 2 vouchers")
+		t.Fatalf("public should show 2 checked vouchers")
 	}
 	summary = pub["summary"].(map[string]interface{})
 	if summary["disbursedAmount"].(float64) != 6000 || summary["usedAmount"].(float64) != 6000 ||
@@ -233,7 +271,7 @@ func TestDisbursementHTTPFlow(t *testing.T) {
 		t.Fatalf("unexpected final summary: %v", summary)
 	}
 
-	// 9. 结项：无待审申请，成功；结项后再申请 → 409。
+	// 12. 结项：无待审申请，成功；结项后再申请 → 409。
 	if code, env := e.do(http.MethodPost, "/api/v1/projects/"+itoa(pid)+"/settle", e.orgTok, nil); code != http.StatusOK {
 		t.Fatalf("settle expected 200, got %d %s", code, env.Message)
 	}

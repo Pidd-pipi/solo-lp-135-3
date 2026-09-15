@@ -93,18 +93,17 @@ func TestDisbursementMainFlow(t *testing.T) {
 		t.Fatalf("order should remain paid, status=%s", paid.Status)
 	}
 
-	// 5. 汇总：已拨 6000、已用 6000、剩余 = 10000 - 6000(app1 approved) = 4000。
+	// 5. 凭证刚回填尚未核验：捐赠人可见口径的已用金额为 0，公示凭证为空。
 	sum, err = f.svc.GetSummary(f.projectID)
 	if err != nil {
 		t.Fatalf("summary after review: %v", err)
 	}
-	if !almostEqual(sum.DisbursedAmount, 6000) || !almostEqual(sum.UsedAmount, 6000) ||
+	if !almostEqual(sum.DisbursedAmount, 6000) || !almostEqual(sum.UsedAmount, 0) ||
 		!almostEqual(sum.OccupiedAmount, 6000) || !almostEqual(sum.RemainingAmount, 4000) ||
 		!almostEqual(sum.PendingAmount, 0) {
-		t.Fatalf("unexpected summary: %+v", sum)
+		t.Fatalf("unchecked vouchers must not count as used: %+v", sum)
 	}
 
-	// 6. 捐赠人公示：仅见已审核拨付单与凭证。
 	orders, vouchers, psum, err := f.svc.PublicFunds(f.projectID)
 	if err != nil {
 		t.Fatalf("public funds: %v", err)
@@ -112,11 +111,51 @@ func TestDisbursementMainFlow(t *testing.T) {
 	if len(orders) != 1 || orders[0].OrderNo != order1.OrderNo {
 		t.Fatalf("public should only see approved order, got %d", len(orders))
 	}
-	if len(vouchers) != 2 {
-		t.Fatalf("public should see 2 vouchers, got %d", len(vouchers))
+	if len(vouchers) != 0 {
+		t.Fatalf("public must not see unchecked vouchers, got %d", len(vouchers))
 	}
-	if !almostEqual(psum.UsedAmount, 6000) {
-		t.Fatalf("public summary used amount wrong: %+v", psum)
+	if !almostEqual(psum.UsedAmount, 0) {
+		t.Fatalf("public used amount should be 0 before checking: %+v", psum)
+	}
+
+	// 6. 平台核验第一张凭证（3500）：已用变为 3500，公示仅见 1 张。
+	if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v1.ID); err != nil {
+		t.Fatalf("check voucher 1: %v", err)
+	}
+	sum, err = f.svc.GetSummary(f.projectID)
+	if err != nil || !almostEqual(sum.UsedAmount, 3500) {
+		t.Fatalf("after checking v1 used should be 3500: %+v err=%v", sum, err)
+	}
+	_, vouchers, psum, err = f.svc.PublicFunds(f.projectID)
+	if err != nil || len(vouchers) != 1 || !almostEqual(psum.UsedAmount, 3500) {
+		t.Fatalf("public should show 1 checked voucher / used 3500, got %d %+v err=%v", len(vouchers), psum, err)
+	}
+
+	// 7. 核验第二张凭证（2500）：已用 6000，公示见 2 张；剩余口径仍由占用决定 = 4000。
+	appDetail, allVouchers, err := f.svc.GetApplication(f.orgUserID, constants.RoleOrg, app1.ID)
+	if err != nil {
+		t.Fatalf("get application vouchers: %v", err)
+	}
+	_ = appDetail
+	if len(allVouchers) != 2 {
+		t.Fatalf("org should see both vouchers incl. unchecked, got %d", len(allVouchers))
+	}
+	var uncheckedID uint
+	for _, vv := range allVouchers {
+		if vv.Status != constants.VoucherChecked {
+			uncheckedID = vv.ID
+		}
+	}
+	if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, uncheckedID); err != nil {
+		t.Fatalf("check voucher 2: %v", err)
+	}
+	sum, _ = f.svc.GetSummary(f.projectID)
+	if !almostEqual(sum.UsedAmount, 6000) || !almostEqual(sum.RemainingAmount, 4000) {
+		t.Fatalf("after both checked used=6000 remaining=4000: %+v", sum)
+	}
+	_, vouchers, psum, _ = f.svc.PublicFunds(f.projectID)
+	if len(vouchers) != 2 || !almostEqual(psum.UsedAmount, 6000) {
+		t.Fatalf("public should show 2 checked vouchers / used 6000, got %d %+v", len(vouchers), psum)
 	}
 
 	// 平台可追溯审核意见、审核人与发生时间。
@@ -389,4 +428,153 @@ func almostEqual(a, b float64) bool {
 		d = -d
 	}
 	return d < constants.AmountEpsilon
+}
+
+// makeCheckedVoucher 创建：申请→通过→回填一张待核验凭证，返回凭证。
+func (f *fundTestFixture) makeUncheckedVoucher(t *testing.T, amount float64) *model.ExpenseVoucher {
+	t.Helper()
+	app := f.applyOK(t, amount, "核验测试用款")
+	if _, _, err := f.svc.Review(f.adminID, app.ID, ReviewInput{Approve: true}); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	v, err := f.svc.AddVoucher(f.orgUserID, app.ID, VoucherInput{
+		Amount: amount, Category: "物资", Usage: "核验测试",
+	})
+	if err != nil {
+		t.Fatalf("add voucher: %v", err)
+	}
+	return v
+}
+
+// 非平台管理员无权核验凭证（组织、普通用户均被拒）。
+func TestCheckVoucherForbidden(t *testing.T) {
+	f := newFundFixture(t)
+	v := f.makeUncheckedVoucher(t, 1000)
+
+	if _, err := f.svc.CheckVoucher(f.orgUserID, constants.RoleOrg, v.ID); !errors.Is(err, ErrVoucherCheckForbidden) {
+		t.Fatalf("org must not check vouchers, got %v", err)
+	}
+	// 越权尝试不得改变凭证状态，也不得计入已用。
+	got, err := repository.NewExpenseVoucherRepository(f.db).FindByID(v.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Status != constants.VoucherPending {
+		t.Fatalf("voucher must remain pending after forbidden attempt, got %s", got.Status)
+	}
+	sum, _ := f.svc.GetSummary(f.projectID)
+	if !almostEqual(sum.UsedAmount, 0) {
+		t.Fatalf("used amount must stay 0, got %.2f", sum.UsedAmount)
+	}
+}
+
+// 重复核验与核验后再次核验都必须返回明确冲突。
+func TestCheckVoucherDuplicateRejected(t *testing.T) {
+	f := newFundFixture(t)
+	v := f.makeUncheckedVoucher(t, 1000)
+
+	checked, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID)
+	if err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	if checked.Status != constants.VoucherChecked || checked.CheckedAt == nil || checked.CheckerID != f.adminID {
+		t.Fatalf("first check must record status/checker/time: %+v", checked)
+	}
+	// 再次核验 → 冲突。
+	if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID); !errors.Is(err, ErrVoucherAlreadyChecked) {
+		t.Fatalf("duplicate check must be ErrVoucherAlreadyChecked, got %v", err)
+	}
+	// 第三次同样冲突。
+	if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID); !errors.Is(err, ErrVoucherAlreadyChecked) {
+		t.Fatalf("repeat check after checked must conflict, got %v", err)
+	}
+	// 已用金额只被计入一次（1000，而非 2000/3000）。
+	sum, _ := f.svc.GetSummary(f.projectID)
+	if !almostEqual(sum.UsedAmount, 1000) {
+		t.Fatalf("used amount must count voucher once, got %.2f", sum.UsedAmount)
+	}
+}
+
+// 并发核验同一凭证：恰好一次成功，其余全部冲突，金额只计入一次。
+func TestConcurrentCheckVoucherSafe(t *testing.T) {
+	f := newFundFixture(t)
+	v := f.makeUncheckedVoucher(t, 2000)
+
+	const n = 6
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v.ID)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var ok, conflict int
+	for _, e := range errs {
+		switch {
+		case e == nil:
+			ok++
+		case errors.Is(e, ErrVoucherAlreadyChecked):
+			conflict++
+		default:
+			t.Fatalf("unexpected check error: %v", e)
+		}
+	}
+	if ok != 1 || conflict != n-1 {
+		t.Fatalf("exactly 1 success and %d conflicts expected, got ok=%d conflict=%d", n-1, ok, conflict)
+	}
+
+	var checkedCount int64
+	if err := f.db.Model(&model.ExpenseVoucher{}).
+		Where("id = ? AND status = ?", v.ID, constants.VoucherChecked).Count(&checkedCount).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if checkedCount != 1 {
+		t.Fatalf("voucher must be checked exactly once, got %d", checkedCount)
+	}
+	sum, _ := f.svc.GetSummary(f.projectID)
+	if !almostEqual(sum.UsedAmount, 2000) {
+		t.Fatalf("used amount must count once under concurrency, got %.2f", sum.UsedAmount)
+	}
+}
+
+// 捐赠人公示只暴露已核验凭证；待核验凭证仅组织/平台可见。
+func TestPublicFundsHidesUncheckedVouchers(t *testing.T) {
+	f := newFundFixture(t)
+	app := f.applyOK(t, 5000, "公示口径")
+	if _, _, err := f.svc.Review(f.adminID, app.ID, ReviewInput{Approve: true}); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	v1, err := f.svc.AddVoucher(f.orgUserID, app.ID, VoucherInput{Amount: 3000, Category: "物资", Usage: "已核验支出"})
+	if err != nil {
+		t.Fatalf("v1: %v", err)
+	}
+	if _, err := f.svc.AddVoucher(f.orgUserID, app.ID, VoucherInput{Amount: 1500, Category: "物流", Usage: "待核验支出"}); err != nil {
+		t.Fatalf("v2: %v", err)
+	}
+
+	// 核验前：捐赠人什么凭证都看不到、已用为 0；组织内部两张都能看到。
+	_, publicVouchers, sum, err := f.svc.PublicFunds(f.projectID)
+	if err != nil || len(publicVouchers) != 0 || !almostEqual(sum.UsedAmount, 0) {
+		t.Fatalf("before check public should see none/used=0, got %d %.2f %v", len(publicVouchers), sum.UsedAmount, err)
+	}
+	_, orgVouchers, err := f.svc.GetApplication(f.orgUserID, constants.RoleOrg, app.ID)
+	if err != nil || len(orgVouchers) != 2 {
+		t.Fatalf("org should see both vouchers, got %d %v", len(orgVouchers), err)
+	}
+
+	// 仅核验第一张：捐赠人只见 3000。
+	if _, err := f.svc.CheckVoucher(f.adminID, constants.RoleAdmin, v1.ID); err != nil {
+		t.Fatalf("check v1: %v", err)
+	}
+	_, publicVouchers, sum, _ = f.svc.PublicFunds(f.projectID)
+	if len(publicVouchers) != 1 || !almostEqual(publicVouchers[0].Amount, 3000) || !almostEqual(sum.UsedAmount, 3000) {
+		t.Fatalf("after checking v1 public used must be 3000, got vouchers=%d used=%.2f", len(publicVouchers), sum.UsedAmount)
+	}
 }

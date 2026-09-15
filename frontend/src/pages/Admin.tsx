@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { adminAPI, fundAPI } from '../api';
 import { Project, Organization, FundApplication } from '../types';
+import AdminVoucherModal from '../components/AdminVoucherModal';
 
 const money = (n: number) => `¥${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -24,6 +25,7 @@ const Admin = () => {
   const [pendingApps, setPendingApps] = useState<FundApplication[]>([]);
   const [allApps, setAllApps] = useState<FundApplication[]>([]);
   const [commentMap, setCommentMap] = useState<Record<string, string>>({});
+  const [voucherAppId, setVoucherAppId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -307,6 +309,7 @@ const Admin = () => {
                     <th className="px-4 py-3 text-left font-medium">状态</th>
                     <th className="px-4 py-3 text-left font-medium">拨付单</th>
                     <th className="px-4 py-3 text-left font-medium">审核意见/时间</th>
+                    <th className="px-4 py-3 text-left font-medium">凭证</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -324,6 +327,18 @@ const Admin = () => {
                         {a.reviewedAt && <div>{new Date(a.reviewedAt).toLocaleString()}</div>}
                         {!a.reviewedAt && a.createdAt && <div>提交于 {new Date(a.createdAt).toLocaleString()}</div>}
                       </td>
+                      <td className="px-4 py-3">
+                        {a.status === 'approved' ? (
+                          <button
+                            onClick={() => setVoucherAppId(a.id)}
+                            className="text-primary-600 hover:underline text-xs"
+                          >
+                            查看/核验凭证
+                          </button>
+                        ) : (
+                          <span className="text-gray-300 text-xs">-</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -331,6 +346,16 @@ const Admin = () => {
             </div>
           )}
         </div>
+      )}
+
+      {voucherAppId && (
+        <AdminVoucherModal
+          applicationId={voucherAppId}
+          onClose={() => setVoucherAppId(null)}
+          onChanged={() => {
+            loadAllApps();
+          }}
+        />
       )}
     </div>
   );

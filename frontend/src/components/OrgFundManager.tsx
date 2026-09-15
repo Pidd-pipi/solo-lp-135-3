@@ -220,7 +220,7 @@ const OrgFundManager = ({ projectId, settled, onChanged }: Props) => {
               ) : (
                 <table className="min-w-full text-sm">
                   <thead className="text-gray-400">
-                    <tr><th className="text-left py-1">日期</th><th className="text-left">类别</th><th className="text-left">用途</th><th className="text-right">金额</th></tr>
+                    <tr><th className="text-left py-1">日期</th><th className="text-left">类别</th><th className="text-left">用途</th><th className="text-left">核验状态</th><th className="text-right">金额</th></tr>
                   </thead>
                   <tbody>
                     {vouchers.map((v) => (
@@ -228,6 +228,11 @@ const OrgFundManager = ({ projectId, settled, onChanged }: Props) => {
                         <td className="py-1">{new Date(v.spentAt).toLocaleDateString()}</td>
                         <td>{v.category}</td>
                         <td className="text-gray-600">{v.usage}</td>
+                        <td>
+                          {v.status === 'checked'
+                            ? <span className="text-green-600 text-xs">已核验</span>
+                            : <span className="text-amber-600 text-xs">待核验</span>}
+                        </td>
                         <td className="text-right">{money(v.amount)}</td>
                       </tr>
                     ))}

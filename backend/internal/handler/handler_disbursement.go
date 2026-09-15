@@ -26,7 +26,8 @@ func (h *DisbursementHandler) fail(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
 		util.Fail(c, http.StatusNotFound, constants.CodeNotFound, err.Error())
-	case errors.Is(err, service.ErrNotProjectOwner):
+	case errors.Is(err, service.ErrNotProjectOwner),
+		errors.Is(err, service.ErrVoucherCheckForbidden):
 		util.Fail(c, http.StatusForbidden, constants.CodeForbidden, err.Error())
 	case errors.Is(err, service.ErrFundQuotaExceeded),
 		errors.Is(err, service.ErrProjectSettled),
@@ -34,9 +35,12 @@ func (h *DisbursementHandler) fail(c *gin.Context, err error) {
 		errors.Is(err, service.ErrApplicationNotApproved),
 		errors.Is(err, service.ErrVoucherExceedsOrder),
 		errors.Is(err, service.ErrHasPendingApplication),
+		errors.Is(err, service.ErrVoucherAlreadyChecked),
 		errors.Is(err, service.ErrProjectNotFundable),
 		errors.Is(err, repository.ErrConflict):
 		util.Fail(c, http.StatusConflict, constants.CodeConflict, err.Error())
+	case errors.Is(err, service.ErrVoucherCheckForbidden):
+		util.Fail(c, http.StatusForbidden, constants.CodeForbidden, err.Error())
 	default:
 		util.FailError(c, err)
 	}
@@ -205,7 +209,7 @@ func (h *DisbursementHandler) CheckVoucher(c *gin.Context) {
 	if !ok {
 		return
 	}
-	v, err := h.disbSvc.CheckVoucher(c.GetUint("user_id"), id)
+	v, err := h.disbSvc.CheckVoucher(c.GetUint("user_id"), c.GetString("role"), id)
 	if err != nil {
 		h.fail(c, err)
 		return

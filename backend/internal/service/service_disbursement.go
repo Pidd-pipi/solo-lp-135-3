@@ -31,6 +31,10 @@ var (
 	ErrVoucherExceedsOrder = errors.New("voucher amount exceeds disbursement order amount")
 	// ErrHasPendingApplication 仍有未审核申请，不能结项。
 	ErrHasPendingApplication = errors.New("project has pending applications and cannot settle")
+	// ErrVoucherAlreadyChecked 凭证已核验，禁止重复/并发核验。
+	ErrVoucherAlreadyChecked = errors.New("voucher already checked")
+	// ErrVoucherCheckForbidden 非平台管理员无权核验凭证。
+	ErrVoucherCheckForbidden = errors.New("forbidden: only platform admin can check vouchers")
 	// ErrNotProjectOwner 非本项目所属组织。
 	ErrNotProjectOwner = errors.New("forbidden: not the owner of this project")
 )
@@ -376,13 +380,34 @@ func (s *DisbursementService) AddVoucher(userID, applicationID uint, in VoucherI
 }
 
 // CheckVoucher 平台核验支出凭证。
-func (s *DisbursementService) CheckVoucher(reviewerID, voucherID uint) (*model.ExpenseVoucher, error) {
-	v, err := s.voucherRepo.FindByID(voucherID)
-	if err != nil {
-		return nil, err
+// 仅平台管理员可核验；已核验凭证禁止重复/并发核验（行锁 + 状态守卫），
+// 核验通过后记录核验人与核验时间，金额才进入捐赠人可见的"已用"口径。
+func (s *DisbursementService) CheckVoucher(reviewerID uint, role string, voucherID uint) (*model.ExpenseVoucher, error) {
+	if role != constants.RoleAdmin {
+		return nil, ErrVoucherCheckForbidden
 	}
-	v.Status = constants.VoucherChecked
-	if err := s.voucherRepo.Update(v); err != nil {
+	unlock := s.locks.lock(voucherKey(voucherID))
+	defer unlock()
+
+	var v *model.ExpenseVoucher
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		voucherRepo := repository.NewExpenseVoucherRepository(tx)
+
+		var err error
+		v, err = voucherRepo.LockByID(voucherID)
+		if err != nil {
+			return err
+		}
+		if v.Status == constants.VoucherChecked {
+			return fmt.Errorf("%w: voucher=%d checked_by=%d", ErrVoucherAlreadyChecked, v.ID, v.CheckerID)
+		}
+		now := time.Now()
+		v.Status = constants.VoucherChecked
+		v.CheckerID = reviewerID
+		v.CheckedAt = &now
+		return voucherRepo.Update(v)
+	})
+	if err != nil {
 		return nil, err
 	}
 	s.logger.Info("expense voucher checked", "voucherId", voucherID, "reviewerId", reviewerID)
@@ -429,13 +454,14 @@ func (s *DisbursementService) SettleProject(userID, projectID uint) error {
 }
 
 // FundSummary 按项目汇总已筹、已拨、已用与剩余额度。
+// 捐赠人口径下"已用金额"仅统计平台已核验的支出凭证；待核验凭证不计入。
 type FundSummary struct {
 	ProjectID       uint    `json:"projectId"`
 	ProjectTitle    string  `json:"projectTitle"`
-	RaisedAmount    float64 `json:"raisedAmount"`
+	RaisedAmount    float64 `json:"raisedAmount"`    // 已筹资金
 	OccupiedAmount  float64 `json:"occupiedAmount"`  // 待审 + 已批占用
 	DisbursedAmount float64 `json:"disbursedAmount"` // 已生成拨付单金额
-	UsedAmount      float64 `json:"usedAmount"`      // 已回填支出凭证金额
+	UsedAmount      float64 `json:"usedAmount"`      // 已核验支出凭证金额（捐赠人可见的已用）
 	PendingAmount   float64 `json:"pendingAmount"`   // 待审核申请金额
 	RemainingAmount float64 `json:"remainingAmount"` // 已筹 - 占用
 }
@@ -465,7 +491,8 @@ func (s *DisbursementService) GetSummary(projectID uint) (*FundSummary, error) {
 		return nil, fmt.Errorf("sum disbursed amount: %w", err)
 	}
 
-	used, err := s.voucherRepo.VoucherTotal(projectID)
+	// "已用金额"只统计平台已核验的支出凭证；待核验凭证不计入捐赠人可见口径。
+	used, err := s.voucherRepo.CheckedVoucherTotal(projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +509,8 @@ func (s *DisbursementService) GetSummary(projectID uint) (*FundSummary, error) {
 	}, nil
 }
 
-// PublicFunds 捐赠人公示视图：项目下已审核通过的拨付单与全部支出凭证。
+// PublicFunds 捐赠人公示视图：项目下已审核通过的拨付单与【已核验】支出凭证。
+// 待核验支出凭证不在此返回，仅供所属组织（GetApplication）与平台后台查看。
 func (s *DisbursementService) PublicFunds(projectID uint) (orders []model.DisbursementOrder, vouchers []model.ExpenseVoucher, summary *FundSummary, err error) {
 	if _, err = s.projectRepo.FindByID(projectID); err != nil {
 		return nil, nil, nil, err
@@ -491,7 +519,7 @@ func (s *DisbursementService) PublicFunds(projectID uint) (orders []model.Disbur
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	vouchers, err = s.voucherRepo.ListByProject(projectID)
+	vouchers, err = s.voucherRepo.ListCheckedByProject(projectID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -544,14 +572,6 @@ func (s *DisbursementService) ListPendingApplications(page, pageSize int) ([]mod
 // ListAllApplications 平台追溯全量申请（可按项目/状态过滤）。
 func (s *DisbursementService) ListAllApplications(projectID uint, status string, page, pageSize int) ([]model.DisbursementApplication, int64, error) {
 	return s.appRepo.ListAll(projectID, status, page, pageSize)
-}
-
-func projectKey(projectID uint) string {
-	return fmt.Sprintf("project:%d", projectID)
-}
-
-func applicationKey(applicationID uint) string {
-	return fmt.Sprintf("application:%d", applicationID)
 }
 
 // newOrderNo 生成唯一单号：DF + 12 位十六进制随机串。

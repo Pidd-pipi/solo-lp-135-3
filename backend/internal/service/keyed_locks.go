@@ -1,6 +1,9 @@
 package service
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+)
 
 // keyedLocks 按字符串键提供互斥锁，不同键（不同项目/申请）之间互不阻塞。
 // 用于在单进程内串行化同一关键资源的额度变更临界区；
@@ -29,4 +32,12 @@ func (k *keyedLocks) lock(key string) func() {
 	m := k.get(key)
 	m.Lock()
 	return m.Unlock
+}
+
+func projectKey(projectID uint) string { return "project:" + uitoa(projectID) }
+func applicationKey(id uint) string    { return "application:" + uitoa(id) }
+func voucherKey(id uint) string        { return "voucher:" + uitoa(id) }
+
+func uitoa(v uint) string {
+	return strconv.FormatUint(uint64(v), 10)
 }

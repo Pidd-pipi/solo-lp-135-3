@@ -143,6 +143,8 @@ export interface ExpenseVoucher {
   progressNote?: string;
   spentAt: string;
   status: VoucherStatus;
+  checkerId?: number;
+  checkedAt?: string;
   createdAt: string;
 }
 

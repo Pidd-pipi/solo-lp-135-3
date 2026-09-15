@@ -83,11 +83,12 @@ const FundPanel = ({ summary, disbursements, vouchers }: Props) => {
         )}
       </div>
 
-      {/* 支出凭证 */}
+      {/* 支出凭证：仅展示平台已核验的支出 */}
       <div>
-        <h3 className="text-lg font-semibold text-gray-900 mb-3">支出用途凭证（{vouchers.length}）</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-1">已核验支出凭证（{vouchers.length}）</h3>
+        <p className="text-xs text-gray-400 mb-3">仅展示平台核验通过的实际支出；待核验凭证暂不公示，也不计入已用金额。</p>
         {vouchers.length === 0 ? (
-          <p className="text-gray-500 text-center py-6 bg-gray-50 rounded-lg">组织尚未回填支出凭证</p>
+          <p className="text-gray-500 text-center py-6 bg-gray-50 rounded-lg">暂无可公示的已核验支出</p>
         ) : (
           <div className="overflow-hidden border border-gray-100 rounded-lg">
             <table className="min-w-full text-sm">

@@ -153,6 +153,8 @@ CREATE TABLE IF NOT EXISTS expense_vouchers (
   progress_note TEXT,
   spent_at DATETIME(3) NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  checker_id BIGINT UNSIGNED DEFAULT 0,
+  checked_at DATETIME(3) NULL,
   created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   INDEX idx_ev_order (order_id),

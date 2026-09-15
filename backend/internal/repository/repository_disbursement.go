@@ -238,6 +238,22 @@ func (r *ExpenseVoucherRepository) FindByID(id uint) (*model.ExpenseVoucher, err
 	return &v, nil
 }
 
+// LockByID 在当前事务内对凭证行加排他锁，串行化核验并发。
+// MySQL 使用 FOR UPDATE；不支持的驱动（测试用 SQLite）退化为普通查询。
+func (r *ExpenseVoucherRepository) LockByID(id uint) (*model.ExpenseVoucher, error) {
+	var v model.ExpenseVoucher
+	q := r.db
+	if r.db.Dialector.Name() == "mysql" {
+		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := q.First(&v, id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("lock voucher by id: %w", err)
+	}
+	return &v, nil
+}
+
 func (r *ExpenseVoucherRepository) Update(v *model.ExpenseVoucher) error {
 	if err := r.db.Save(v).Error; err != nil {
 		return fmt.Errorf("update expense voucher: %w", err)
@@ -245,12 +261,22 @@ func (r *ExpenseVoucherRepository) Update(v *model.ExpenseVoucher) error {
 	return nil
 }
 
-// ListByProject 捐赠人公示：项目下所有支出凭证（均挂靠已审核拨付单）。
+// ListByProject 项目下全部支出凭证（含待核验），仅供所属组织/平台内部查看。
 func (r *ExpenseVoucherRepository) ListByProject(projectID uint) ([]model.ExpenseVoucher, error) {
 	var list []model.ExpenseVoucher
 	if err := r.db.Where("project_id = ?", projectID).
 		Order("spent_at DESC, created_at DESC").Find(&list).Error; err != nil {
 		return nil, fmt.Errorf("list vouchers by project: %w", err)
+	}
+	return list, nil
+}
+
+// ListCheckedByProject 捐赠人公示：仅返回平台已核验通过的支出凭证。
+func (r *ExpenseVoucherRepository) ListCheckedByProject(projectID uint) ([]model.ExpenseVoucher, error) {
+	var list []model.ExpenseVoucher
+	if err := r.db.Where("project_id = ? AND status = ?", projectID, constants.VoucherChecked).
+		Order("spent_at DESC, created_at DESC").Find(&list).Error; err != nil {
+		return nil, fmt.Errorf("list checked vouchers by project: %w", err)
 	}
 	return list, nil
 }
@@ -265,7 +291,7 @@ func (r *ExpenseVoucherRepository) ListByOrder(orderID uint) ([]model.ExpenseVou
 	return list, nil
 }
 
-// VoucherTotal 项目已回填支出凭证金额合计。
+// VoucherTotal 项目已回填支出凭证金额合计（含待核验），供内部对账。
 func (r *ExpenseVoucherRepository) VoucherTotal(projectID uint) (float64, error) {
 	var total float64
 	err := r.db.Model(&model.ExpenseVoucher{}).
@@ -273,6 +299,18 @@ func (r *ExpenseVoucherRepository) VoucherTotal(projectID uint) (float64, error)
 		Select("COALESCE(SUM(amount),0)").Scan(&total).Error
 	if err != nil {
 		return 0, fmt.Errorf("sum voucher amount: %w", err)
+	}
+	return total, nil
+}
+
+// CheckedVoucherTotal 项目已核验支出凭证金额合计（捐赠人公示口径的"已用金额"）。
+func (r *ExpenseVoucherRepository) CheckedVoucherTotal(projectID uint) (float64, error) {
+	var total float64
+	err := r.db.Model(&model.ExpenseVoucher{}).
+		Where("project_id = ? AND status = ?", projectID, constants.VoucherChecked).
+		Select("COALESCE(SUM(amount),0)").Scan(&total).Error
+	if err != nil {
+		return 0, fmt.Errorf("sum checked voucher amount: %w", err)
 	}
 	return total, nil
 }
